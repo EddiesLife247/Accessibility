@@ -17,8 +17,12 @@
 
 -- =============================================================================
 -- 1. EMERGENCY LIGHTING SUPPRESSION
--- Suppresses visual strobe/flash on emergency vehicles.
+-- Suppresses visual extras on emergency vehicles client-side only.
+-- Does NOT call SetVehicleSiren on other players' vehicles — that is a
+-- network-synced native and causes periodic blipping as the server fights
+-- the client state. Extras are suppressed client-side only.
 -- Audio (sirens) deliberately preserved.
+-- Only runs when the player has opted into suppression (lighting toggle = true).
 -- =============================================================================
 Citizen.CreateThread(function()
     while true do
@@ -26,23 +30,29 @@ Citizen.CreateThread(function()
             local system = Config.LightingSystem and Config.LightingSystem.system or "default"
 
             if system == "oels" then
+                -- OELS manages its own suppression, nothing to do here
                 Wait(1000)
             else
                 local localPed = PlayerPedId()
                 local localVeh = GetVehiclePedIsUsing(localPed)
-                local vehicles = GetGamePool('CVehicle')
-                for _, vehicle in ipairs(vehicles) do
+
+                for _, vehicle in ipairs(GetGamePool('CVehicle')) do
                     if GetVehicleClass(vehicle) == 18 and vehicle ~= localVeh then
-                        SetVehicleSiren(vehicle, false)
+                        for extra = 1, 12 do
+                            if DoesExtraExist(vehicle, extra) and IsVehicleExtraTurnedOn(vehicle, extra) then
+                                SetVehicleExtra(vehicle, extra, true)
+                            end
+                        end
                     end
                 end
+                Wait(0)
             end
-            Wait(500)
         else
             Wait(2000)
         end
     end
 end)
+
 -- =============================================================================
 -- 2. EXPLOSION FLASH SUPPRESSION
 -- Detects nearby damage events and briefly dims the screen to
@@ -55,15 +65,12 @@ Citizen.CreateThread(function()
         if AccessibilityManager and AccessibilityManager:GetState('explosionFlash') then
             local playerPed = PlayerPedId()
 
-            -- HasEntityBeenDamagedByAnyObject/Vehicle are valid FiveM natives
-            -- that fire when an explosion damages the player entity
             if not explosionFlashActive then
                 if HasEntityBeenDamagedByAnyObject(playerPed) or
                    HasEntityBeenDamagedByAnyVehicle(playerPed) then
 
                     explosionFlashActive = true
 
-                    -- Apply dim overlay if no colour filter already active
                     if not AccessibilityManager:UpdateTimecycle() then
                         SetTimecycleModifier("glasses_black")
                         SetTimecycleModifierStrength(0.6)
@@ -71,7 +78,6 @@ Citizen.CreateThread(function()
 
                     ClearEntityLastDamageEntity(playerPed)
 
-                    -- Release suppression after 400ms
                     Citizen.SetTimeout(400, function()
                         explosionFlashActive = false
                         AccessibilityManager:UpdateTimecycle()
@@ -98,17 +104,14 @@ Citizen.CreateThread(function()
             local playerPed = PlayerPedId()
 
             if IsPedShooting(playerPed) then
-                -- "no_extra_hdr" reduces the bloom/glow that amplifies muzzle flash
                 SetTimecycleModifier("no_extra_hdr")
                 SetTimecycleModifierStrength(0.8)
             else
-                -- Restore normal filter (or other active accessibility filter)
                 AccessibilityManager:UpdateTimecycle()
             end
 
             Wait(0)
         else
-            -- Restore when feature toggled off
             if AccessibilityManager then
                 AccessibilityManager:UpdateTimecycle()
             end
@@ -136,14 +139,11 @@ end)
 
 -- =============================================================================
 -- 5. MOTION BLUR DISABLE
--- Uses the correct native: _SET_USE_HIDOF (hash workaround) isn't needed —
--- GTA uses SetMotionBlurStrength but it maps to a different hash in FiveM.
--- We use the CAM native instead.
+-- 0x4CA3B078 = SET_USE_HIDOF — disables depth-of-field & motion blur pass.
 -- =============================================================================
 Citizen.CreateThread(function()
     while true do
         if AccessibilityManager and AccessibilityManager:GetState('motionBlur') then
-            -- 0x4CA3B078 = SET_USE_HIDOF — disables depth-of-field & motion blur pass
             Citizen.InvokeNative(0x4CA3B078, false)
             Wait(1000)
         else
@@ -155,12 +155,11 @@ end)
 
 -- =============================================================================
 -- 6. CHROMATIC ABERRATION DISABLE
--- Correct FiveM hash for SetChromaticAberrationEnabled
+-- 0x12E4F3CB = SET_CHROMATIC_ABERRATION_ENABLED
 -- =============================================================================
 Citizen.CreateThread(function()
     while true do
         if AccessibilityManager and AccessibilityManager:GetState('chromaticAberration') then
-            -- 0x12E4F3CB = SET_CHROMATIC_ABERRATION_ENABLED
             Citizen.InvokeNative(0x12E4F3CB, false)
             Wait(2000)
         else
@@ -173,6 +172,7 @@ end)
 -- =============================================================================
 -- 7. CAMERA SWAY REDUCTION
 -- Reduces on-foot head bob using gameplay cam shake clamping.
+-- 0xDC51E4F4 = DISABLE_CAM_COLLISION_FOR_ENTITY
 -- =============================================================================
 Citizen.CreateThread(function()
     while true do
@@ -180,8 +180,6 @@ Citizen.CreateThread(function()
             if IsGameplayCamShaking() then
                 SetGameplayCamShakeAmplitude(0.0)
             end
-            -- Suppress cinematic head bob via render phase override
-            -- 0xDC51E4F4 = DISABLE_CAM_COLLISION_FOR_ENTITY
             Citizen.InvokeNative(0xDC51E4F4, PlayerPedId())
             Wait(500)
         else
@@ -224,7 +222,6 @@ Citizen.CreateThread(function()
             end
 
             if sprintToggledOn then
-                -- Simulate holding the sprint key every frame
                 SetControlNormal(0, SPRINT_KEY, 1.0)
             end
 
@@ -242,7 +239,6 @@ end)
 -- 10. VISUAL SOUND ALERTS (Hearing Impaired)
 -- On-screen HUD indicators for sirens, gunshots, and explosions.
 -- =============================================================================
-
 local activeAlerts   = {}
 local alertIdCounter = 0
 
@@ -250,14 +246,11 @@ local function drawAlert(alert)
     local x = 0.5
     local y = 0.85 - (alert.slot * 0.06)
 
-    -- Background
     DrawRect(x, y, 0.25, 0.045, 0, 0, 0, 180)
 
-    -- Colour bar on left
     local r, g, b = table.unpack(alert.color)
     DrawRect(x - 0.115, y, 0.02, 0.045, r, g, b, 255)
 
-    -- Text
     SetTextFont(4)
     SetTextScale(0.0, 0.32)
     SetTextColour(255, 255, 255, 255)
@@ -267,7 +260,6 @@ local function drawAlert(alert)
 end
 
 local function addVisualAlert(message, color)
-    -- Debounce — don't add duplicate alerts within 2 seconds
     for _, a in pairs(activeAlerts) do
         if a.message == message then return end
     end
@@ -320,11 +312,9 @@ Citizen.CreateThread(function()
             local cfg          = Config.VisualAlerts or {}
             local interval     = cfg.checkInterval or 500
 
-            -- Siren detection
             if now - lastSirenCheck > interval then
                 lastSirenCheck = now
-                local vehicles = GetGamePool('CVehicle')
-                for _, veh in ipairs(vehicles) do
+                for _, veh in ipairs(GetGamePool('CVehicle')) do
                     if IsVehicleSirenOn(veh) then
                         local dist = #(playerCoords - GetEntityCoords(veh))
                         if dist <= (cfg.sirenRadius or 50.0) then
@@ -335,11 +325,9 @@ Citizen.CreateThread(function()
                 end
             end
 
-            -- Gunshot detection via IsPedShooting on nearby peds
             if now - lastGunshotCheck > interval then
                 lastGunshotCheck = now
-                local peds = GetGamePool('CPed')
-                for _, ped in ipairs(peds) do
+                for _, ped in ipairs(GetGamePool('CPed')) do
                     if ped ~= playerPed then
                         local dist = #(playerCoords - GetEntityCoords(ped))
                         if dist <= (cfg.gunshotRadius or 30.0) and IsPedShooting(ped) then
@@ -348,13 +336,11 @@ Citizen.CreateThread(function()
                         end
                     end
                 end
-                -- Check if player is taking damage via health threshold
                 if not IsEntityDead(playerPed) and GetEntityHealth(playerPed) < 200 then
                     addVisualAlert("⚠️ Taking damage!", {255, 60, 0})
                 end
             end
 
-            -- Explosion / heavy damage detection
             if now - lastExplosionCheck > interval then
                 lastExplosionCheck = now
                 if HasEntityBeenDamagedByAnyObject(playerPed) or

@@ -11,10 +11,23 @@ PURPOSE: Core Functionality and User Input
 ---------------------------------------------------
 ]]
 
+--[[
+---------------------------------------------------
+LUXART VEHICLE CONTROL V3 (FOR FIVEM)
+---------------------------------------------------
+Coded by Lt.Caine
+ELS Clicks by Faction
+Additional Modification by TrevorBarns
+---------------------------------------------------
+FILE: cl_lvc.lua
+PURPOSE: Core Functionality and User Input
+---------------------------------------------------
+]]
+
 -- =============================================================================
 -- ACCESSIBILITY DEBUG LOGGING
 -- Set accessibility_debug = true to enable verbose console logs.
--- Set to false for production — zero performance cost when off.
+-- Set to false for production â€” zero performance cost when off.
 -- Toggle in-game with command: /lvc_accessdebug
 -- =============================================================================
 local accessibility_debug = false
@@ -28,8 +41,10 @@ end
 -- =============================================================================
 -- ACCESSIBILITY: LIGHTING STATE
 -- Polls the Accessibility export every 500ms.
+-- isEnvLightingEnabledForPlayer = true means the player has OPTED IN to
+-- suppression. false = normal, no suppression.
 -- accessibility_switch_on tracks Q (master switch) state independently of
--- IsVehicleSirenOn() so it stays stable between frames when lighting is off.
+-- IsVehicleSirenOn() so it stays stable between frames when suppression is on.
 -- =============================================================================
 local isEnvLightingEnabledForPlayer = exports["Accessibility"]:GetLighting()
 local accessibility_switch_on = false
@@ -41,8 +56,8 @@ CreateThread(function()
         isEnvLightingEnabledForPlayer = exports["Accessibility"]:GetLighting()
         if isEnvLightingEnabledForPlayer ~= last then
             ALog("Lighting state changed -> " .. tostring(isEnvLightingEnabledForPlayer))
-            -- If lighting just re-enabled, sync switch flag to actual vehicle state
-            if isEnvLightingEnabledForPlayer and veh ~= nil then
+            -- If suppression just turned OFF, re-sync switch flag to actual vehicle state
+            if not isEnvLightingEnabledForPlayer and veh ~= nil then
                 accessibility_switch_on = IsVehicleSirenOn(veh)
             end
             last = isEnvLightingEnabledForPlayer
@@ -52,30 +67,25 @@ end)
 
 -- =============================================================================
 -- ACCESSIBILITY: SUPPRESS OTHER PLAYERS' FLASHING EXTRAS (CLIENT-SIDE ONLY)
--- Covers LVC-driven extras on other players' vehicles that oELS does not manage.
--- Does NOT call SetVehicleHasMutedSirens — their audio stays audible.
--- Only runs on Character 1's client (lighting disabled).
--- Character 2 (lighting enabled) hits Wait(500) and does nothing.
+-- Only runs when this player has opted into suppression (isEnvLightingEnabledForPlayer = true).
+-- Does NOT call SetVehicleSiren on other players' vehicles â€” that is a
+-- network-synced native and causes periodic blipping as the server fights
+-- the client state. Extras are suppressed client-side only.
+-- Audio (sirens) deliberately preserved.
 -- =============================================================================
 CreateThread(function()
     while true do
-        if not isEnvLightingEnabledForPlayer then
+        if isEnvLightingEnabledForPlayer then
             local localPed = GetPlayerPed(-1)
             local localVeh = GetVehiclePedIsUsing(localPed)
-            local suppressed = 0
             for _, vehEnt in ipairs(GetGamePool('CVehicle')) do
                 if GetVehicleClass(vehEnt) == 18 and vehEnt ~= localVeh then
-                    SetVehicleSiren(vehEnt, false)
                     for extra = 1, 12 do
                         if DoesExtraExist(vehEnt, extra) and IsVehicleExtraTurnedOn(vehEnt, extra) then
                             SetVehicleExtra(vehEnt, extra, true)
-                            suppressed = suppressed + 1
                         end
                     end
                 end
-            end
-            if suppressed > 0 then
-                ALog("Suppressed " .. suppressed .. " extras on other players this frame")
             end
             Wait(0)
         else
@@ -256,8 +266,22 @@ end)
 -- =============================================================================
 RegisterNetEvent('lvc:onVehicleExit')
 AddEventHandler('lvc:onVehicleExit', function()
-    ALog("onVehicleExit — resetting accessibility_switch_on")
+    ALog("onVehicleExit â€” resetting accessibility_switch_on")
+
+    -- Explicitly suppress the vehicle we are leaving before state is lost
+    if isEnvLightingEnabledForPlayer and veh ~= nil and DoesEntityExist(veh) then
+        SetVehicleSiren(veh, false)
+        SetVehicleHasMutedSirens(veh, false)
+        for extra = 1, 12 do
+            if DoesExtraExist(veh, extra) then
+                SetVehicleExtra(veh, extra, true)
+            end
+        end
+        ALog("onVehicleExit â€” extras and siren suppressed on exited vehicle")
+    end
+
     accessibility_switch_on = false
+
     if park_kill_masterswitch and park_kill then
         if not tone_main_reset_standby and state_lxsiren[veh] ~= 0 then
             UTIL:SetToneByID('MAIN_MEM', state_lxsiren[veh])
@@ -273,7 +297,7 @@ end)
 
 RegisterNetEvent('lvc:onVehicleChange')
 AddEventHandler('lvc:onVehicleChange', function()
-    ALog("onVehicleChange — resetting accessibility_switch_on")
+    ALog("onVehicleChange â€” resetting accessibility_switch_on")
     accessibility_switch_on = false
     last_veh = veh
     UTIL:UpdateApprovedTones(veh)
@@ -628,41 +652,42 @@ CreateThread(function()
 
             if GetVehicleClass(veh) == 18 then
 
-                -- =================================================================
+-- =================================================================
                 -- ACCESSIBILITY: LIGHTS_ON DERIVATION
                 --
-                -- When lighting DISABLED (Character 1 / epilepsy mode):
-                --   - SetVehicleSiren(veh, true) is never called — no R* flash
+                -- When suppression ENABLED (isEnvLightingEnabledForPlayer = true):
+                --   - SetVehicleSiren(veh, true) is called with muted sirens
+                --     so AI reacts but no R* flash occurs
                 --   - lights_on = accessibility_switch_on (stable flag set by Q press)
                 --     This prevents flickering caused by IsVehicleSirenOn() always
                 --     returning false because we suppress it every frame below
                 --   - LVC audio (PlaySoundFromEntity) is completely unaffected
                 --
-                -- When lighting ENABLED (Character 2 / normal):
-                --   - Normal path, accessibility_switch_on kept in sync
-                --   - No behaviour change whatsoever
+                -- When suppression DISABLED (isEnvLightingEnabledForPlayer = false):
+                --   - Normal path, no behaviour change whatsoever
                 -- =================================================================
-if not isEnvLightingEnabledForPlayer then
-    if accessibility_switch_on then
-        -- Siren is "on" — trigger AI pull-over but suppress flash/default audio
-        SetVehicleSiren(veh, true)
-        SetVehicleHasMutedSirens(veh, true)
-        if trailer ~= nil and trailer ~= 0 then
-            SetVehicleSiren(trailer, true)
-            SetVehicleHasMutedSirens(trailer, true)
-        end
-    else
-        -- Siren is "off" — make sure everything is actually off
-        SetVehicleSiren(veh, false)
-        if trailer ~= nil and trailer ~= 0 then
-            SetVehicleSiren(trailer, false)
-        end
-    end
-    lights_on = accessibility_switch_on
-else
-    lights_on = IsVehicleSirenOn(veh)
-    accessibility_switch_on = lights_on
-end
+                if isEnvLightingEnabledForPlayer then
+                    if accessibility_switch_on then
+                        -- Siren is "on" â€” trigger AI pull-over but suppress flash/default audio
+                        SetVehicleSiren(veh, true)
+                        SetVehicleHasMutedSirens(veh, true)
+                        if trailer ~= nil and trailer ~= 0 then
+                            SetVehicleSiren(trailer, true)
+                            SetVehicleHasMutedSirens(trailer, true)
+                        end
+                    else
+                        -- Siren is "off" â€” make sure everything is actually off
+                        SetVehicleSiren(veh, false)
+                        if trailer ~= nil and trailer ~= 0 then
+                            SetVehicleSiren(trailer, false)
+                        end
+                    end
+                    lights_on = accessibility_switch_on
+                else
+                    lights_on = IsVehicleSirenOn(veh)
+                    accessibility_switch_on = lights_on
+                end
+                -- =================================================================
                 -- =================================================================
 
                 if radio_masterswitch then
@@ -695,9 +720,9 @@ end
                         if not key_lock then
 
                             -- Q: MASTER LIGHTS SWITCH
-                            if IsDisabledControlJustReleased(0, 85) then
+if IsDisabledControlJustReleased(0, 85) then
                                 if lights_on then
-                                    ALog("Q -> lights OFF | accessibility=" .. tostring(not isEnvLightingEnabledForPlayer))
+                                    ALog("Q -> lights OFF | suppression=" .. tostring(isEnvLightingEnabledForPlayer))
                                     AUDIO:Play('Off', AUDIO.off_volume)
                                     HUD:SetItemState('switch', false)
                                     HUD:SetItemState('siren', false)
@@ -706,25 +731,26 @@ end
                                         SetVehicleSiren(trailer, false)
                                     end
                                     accessibility_switch_on = false
-else
-    AUDIO:Play('On', AUDIO.on_volume)
-    HUD:SetItemState('switch', true)
-    accessibility_switch_on = true
-    if isEnvLightingEnabledForPlayer then
-        SetVehicleSiren(veh, true)
-        if trailer ~= nil and trailer ~= 0 then
-            SetVehicleSiren(trailer, true)
-        end
-    else
-        -- Accessibility on — mute flash but keep AI reaction
-        SetVehicleSiren(veh, true)
-        SetVehicleHasMutedSirens(veh, true)
-        if trailer ~= nil and trailer ~= 0 then
-            SetVehicleSiren(trailer, true)
-            SetVehicleHasMutedSirens(trailer, true)
-        end
-    end
-end
+                                else
+                                    AUDIO:Play('On', AUDIO.on_volume)
+                                    HUD:SetItemState('switch', true)
+                                    accessibility_switch_on = true
+                                    if not isEnvLightingEnabledForPlayer then
+                                        -- Normal mode â€” full lights and flash
+                                        SetVehicleSiren(veh, true)
+                                        if trailer ~= nil and trailer ~= 0 then
+                                            SetVehicleSiren(trailer, true)
+                                        end
+                                    else
+                                        -- Suppression active â€” mute flash but keep AI reaction
+                                        SetVehicleSiren(veh, true)
+                                        SetVehicleHasMutedSirens(veh, true)
+                                        if trailer ~= nil and trailer ~= 0 then
+                                            SetVehicleSiren(trailer, true)
+                                            SetVehicleHasMutedSirens(trailer, true)
+                                        end
+                                    end
+                                end
                                 AUDIO:ResetActivityTimer()
                                 count_bcast_timer = delay_bcast_timer
 
