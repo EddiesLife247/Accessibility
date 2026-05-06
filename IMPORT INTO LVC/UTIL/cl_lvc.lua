@@ -73,22 +73,33 @@ end)
 -- the client state. Extras are suppressed client-side only.
 -- Audio (sirens) deliberately preserved.
 -- =============================================================================
+local lastOccupiedEmergVehLVC = nil
+
 CreateThread(function()
     while true do
         if isEnvLightingEnabledForPlayer then
             local localPed = GetPlayerPed(-1)
             local localVeh = GetVehiclePedIsUsing(localPed)
+
+            if localVeh ~= 0 and GetVehicleClass(localVeh) == 18 then
+                lastOccupiedEmergVehLVC = localVeh
+            end
+
             for _, vehEnt in ipairs(GetGamePool('CVehicle')) do
                 if GetVehicleClass(vehEnt) == 18 and vehEnt ~= localVeh then
-                    for extra = 1, 12 do
-                        if DoesExtraExist(vehEnt, extra) and IsVehicleExtraTurnedOn(vehEnt, extra) then
-                            SetVehicleExtra(vehEnt, extra, true)
-                        end
-                    end
+                    SetVehicleHasMutedSirens(vehEnt, true)
                 end
             end
+
+            if lastOccupiedEmergVehLVC ~= nil
+            and lastOccupiedEmergVehLVC ~= localVeh
+            and DoesEntityExist(lastOccupiedEmergVehLVC) then
+                SetVehicleHasMutedSirens(lastOccupiedEmergVehLVC, true)
+            end
+
             Wait(0)
         else
+            lastOccupiedEmergVehLVC = nil
             Wait(500)
         end
     end
@@ -268,16 +279,9 @@ RegisterNetEvent('lvc:onVehicleExit')
 AddEventHandler('lvc:onVehicleExit', function()
     ALog("onVehicleExit — resetting accessibility_switch_on")
 
-    -- Explicitly suppress the vehicle we are leaving before state is lost
     if isEnvLightingEnabledForPlayer and veh ~= nil and DoesEntityExist(veh) then
-        SetVehicleSiren(veh, false)
-        SetVehicleHasMutedSirens(veh, false)
-        for extra = 1, 12 do
-            if DoesExtraExist(veh, extra) then
-                SetVehicleExtra(veh, extra, true)
-            end
-        end
-        ALog("onVehicleExit — extras and siren suppressed on exited vehicle")
+        SetVehicleHasMutedSirens(veh, true)
+        ALog("onVehicleExit — muted sirens kept on exited vehicle")
     end
 
     accessibility_switch_on = false
@@ -653,40 +657,40 @@ CreateThread(function()
             if GetVehicleClass(veh) == 18 then
 
 -- =================================================================
-                -- ACCESSIBILITY: LIGHTS_ON DERIVATION
-                --
-                -- When suppression ENABLED (isEnvLightingEnabledForPlayer = true):
-                --   - SetVehicleSiren(veh, true) is called with muted sirens
-                --     so AI reacts but no R* flash occurs
-                --   - lights_on = accessibility_switch_on (stable flag set by Q press)
-                --     This prevents flickering caused by IsVehicleSirenOn() always
-                --     returning false because we suppress it every frame below
-                --   - LVC audio (PlaySoundFromEntity) is completely unaffected
-                --
-                -- When suppression DISABLED (isEnvLightingEnabledForPlayer = false):
-                --   - Normal path, no behaviour change whatsoever
-                -- =================================================================
-                if isEnvLightingEnabledForPlayer then
-                    if accessibility_switch_on then
-                        -- Siren is "on" — trigger AI pull-over but suppress flash/default audio
-                        SetVehicleSiren(veh, true)
-                        SetVehicleHasMutedSirens(veh, true)
-                        if trailer ~= nil and trailer ~= 0 then
-                            SetVehicleSiren(trailer, true)
-                            SetVehicleHasMutedSirens(trailer, true)
-                        end
-                    else
-                        -- Siren is "off" — make sure everything is actually off
-                        SetVehicleSiren(veh, false)
-                        if trailer ~= nil and trailer ~= 0 then
-                            SetVehicleSiren(trailer, false)
-                        end
-                    end
-                    lights_on = accessibility_switch_on
-                else
-                    lights_on = IsVehicleSirenOn(veh)
-                    accessibility_switch_on = lights_on
-                end
+-- ACCESSIBILITY: LIGHTS_ON DERIVATION
+-- =================================================================
+if isEnvLightingEnabledForPlayer then
+    if accessibility_switch_on then
+        -- Only call these on the first frame after switch_on becomes true
+        -- not every frame — prevents audio blip from repeated siren calls
+        if not IsVehicleSirenOn(veh) then
+            SetVehicleSiren(veh, true)
+            SetVehicleHasMutedSirens(veh, true)
+            if trailer ~= nil and trailer ~= 0 then
+                SetVehicleSiren(trailer, true)
+                SetVehicleHasMutedSirens(trailer, true)
+            end
+        else
+            -- Siren already on, just keep muted — no blip
+            SetVehicleHasMutedSirens(veh, true)
+            if trailer ~= nil and trailer ~= 0 then
+                SetVehicleHasMutedSirens(trailer, true)
+            end
+        end
+    else
+        if IsVehicleSirenOn(veh) then
+            SetVehicleSiren(veh, false)
+            if trailer ~= nil and trailer ~= 0 then
+                SetVehicleSiren(trailer, false)
+            end
+        end
+    end
+    lights_on = accessibility_switch_on
+else
+    lights_on = IsVehicleSirenOn(veh)
+    accessibility_switch_on = lights_on
+end
+-- =================================================================
                 -- =================================================================
                 -- =================================================================
 
