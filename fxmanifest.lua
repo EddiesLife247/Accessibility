@@ -3,7 +3,7 @@ game 'gta5'
 
 author 'EddiesLife247'
 description 'Enhanced FiveM Accessibility System - Epilepsy protection, visual filters, motor aids, hearing aids, TTS, and more'
-version '5.1.1'
+version '5.1.2'
 
 license 'MIT'
 
