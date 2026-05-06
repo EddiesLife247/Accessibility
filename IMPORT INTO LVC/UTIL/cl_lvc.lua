@@ -285,6 +285,7 @@ AddEventHandler('lvc:onVehicleExit', function()
     end
 
     accessibility_switch_on = false
+    acc_last_switch_state = nil
 
     if park_kill_masterswitch and park_kill then
         if not tone_main_reset_standby and state_lxsiren[veh] ~= 0 then
@@ -303,6 +304,7 @@ RegisterNetEvent('lvc:onVehicleChange')
 AddEventHandler('lvc:onVehicleChange', function()
     ALog("onVehicleChange — resetting accessibility_switch_on")
     accessibility_switch_on = false
+    acc_last_switch_state = nil
     last_veh = veh
     UTIL:UpdateApprovedTones(veh)
     Wait(100)
@@ -656,14 +658,16 @@ CreateThread(function()
 
             if GetVehicleClass(veh) == 18 then
 
+-- Add this near the top with your other local variables
+local acc_last_switch_state = nil
+
 -- =================================================================
 -- ACCESSIBILITY: LIGHTS_ON DERIVATION
 -- =================================================================
 if isEnvLightingEnabledForPlayer then
     if accessibility_switch_on then
-        -- Only call these on the first frame after switch_on becomes true
-        -- not every frame — prevents audio blip from repeated siren calls
-        if not IsVehicleSirenOn(veh) then
+        if acc_last_switch_state ~= true then
+            acc_last_switch_state = true
             SetVehicleSiren(veh, true)
             SetVehicleHasMutedSirens(veh, true)
             if trailer ~= nil and trailer ~= 0 then
@@ -671,14 +675,15 @@ if isEnvLightingEnabledForPlayer then
                 SetVehicleHasMutedSirens(trailer, true)
             end
         else
-            -- Siren already on, just keep muted — no blip
+            -- State unchanged, just keep muted without re-triggering siren
             SetVehicleHasMutedSirens(veh, true)
             if trailer ~= nil and trailer ~= 0 then
                 SetVehicleHasMutedSirens(trailer, true)
             end
         end
     else
-        if IsVehicleSirenOn(veh) then
+        if acc_last_switch_state ~= false then
+            acc_last_switch_state = false
             SetVehicleSiren(veh, false)
             if trailer ~= nil and trailer ~= 0 then
                 SetVehicleSiren(trailer, false)
@@ -687,6 +692,7 @@ if isEnvLightingEnabledForPlayer then
     end
     lights_on = accessibility_switch_on
 else
+    acc_last_switch_state = nil
     lights_on = IsVehicleSirenOn(veh)
     accessibility_switch_on = lights_on
 end
